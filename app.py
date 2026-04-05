@@ -123,7 +123,8 @@ user_ans = st.text_area("解答を入力:", key=input_key, height=200, label_vis
 
 # 5. 解答の表示（アコーディオン）
 with st.expander("💡 解答を表示する"):
-    st.success(current_q.get("answer", "解答データがありません。"))
+    answer_text = current_q.get("answer", "解答データがありません。").replace("\n", "  \n")
+    st.success(answer_text)
 
 st.write("---")
 
