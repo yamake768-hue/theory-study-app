@@ -62,7 +62,8 @@ current_q = questions[st.session_state.q_index]
 st.caption(f"問題 {st.session_state.q_index + 1} / {total_q}")
 
 # 2. 問題文の表示
-st.info(current_q.get("question", ""))
+question_text = current_q.get("question", "").replace("\n", "  \n")
+st.info(question_text)
 
 # 3. 解答の目安を計算・表示
 format_text = current_q.get("format", "")
