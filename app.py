@@ -1,36 +1,50 @@
 import streamlit as st
 import json
 import os
+import glob
 
 # --- ページ設定 ---
-# タブレット等の広い画面でも見やすいように設定
 st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="centered")
 
-# --- データ読み込み ---
+# --- データ読み込み（複数ファイル対応） ---
 @st.cache_data
 def load_data():
-    questions_file = "questions.json"
-    if os.path.exists(questions_file):
-        with open(questions_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+    data = {}
+    # questionsフォルダ内の全JSONファイルを取得
+    # クラウド環境等でフォルダがない場合は空の辞書を返す
+    if not os.path.exists("questions"):
+        return data
+        
+    json_files = glob.glob("questions/*.json")
+    
+    # ファイル名でソートして読み込む（第1章、第2章...と順番に並べるため）
+    for file_path in sorted(json_files):
+        # ファイル名（拡張子なし）を章のタイトルとして取得
+        chapter_name = os.path.splitext(os.path.basename(file_path))[0]
+        with open(file_path, "r", encoding="utf-8") as f:
+            chapter_data = json.load(f)
+            data[chapter_name] = chapter_data
+            
+    return data
 
 data = load_data()
 
 if not data:
-    st.error("questions.json が見つからないか、データが空です。")
+    st.error("「questions」フォルダが見つからないか、中にJSONデータがありません。")
     st.stop()
 
-categories = list(data.keys())
+chapters = list(data.keys())
 
 # --- セッション状態（状態管理）の初期化 ---
+if "chapter" not in st.session_state:
+    st.session_state.chapter = chapters[0]
 if "category" not in st.session_state:
-    st.session_state.category = categories[0]
+    st.session_state.category = list(data[chapters[0]].keys())[0]
 if "q_index" not in st.session_state:
     st.session_state.q_index = 0
 
-# カテゴリが変更されたときに問題番号をリセットするコールバック関数
-def on_category_change():
+# ドロップダウン変更時のリセット処理
+def on_dropdown_change():
     st.session_state.q_index = 0
 
 # ボタン用のコールバック関数
@@ -42,26 +56,44 @@ def go_next(total_q):
     if st.session_state.q_index < total_q - 1:
         st.session_state.q_index += 1
 
-
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# 1. カテゴリ選択（ドロップダウン）
-selected_category = st.selectbox(
-    "単元を選択してください",
-    categories,
-    key="category",
-    on_change=on_category_change
-)
+# 1. 章と単元の選択（2段階ドロップダウン）
+col_ch, col_cat = st.columns(2) # PCやタブレットでは横並び、スマホでは自動で縦並びになります
 
-questions = data[selected_category]
+with col_ch:
+    selected_chapter = st.selectbox(
+        "章を選択",
+        chapters,
+        key="chapter",
+        on_change=on_dropdown_change
+    )
+
+# 選択された章に属する単元リストを取得
+categories = list(data[selected_chapter].keys())
+
+with col_cat:
+    selected_category = st.selectbox(
+        "単元を選択",
+        categories,
+        key="category",
+        on_change=on_dropdown_change
+    )
+
+questions = data[selected_chapter][selected_category]
 total_q = len(questions)
+
+# q_indexが範囲外になった場合の安全対策
+if st.session_state.q_index >= total_q:
+    st.session_state.q_index = 0
+
 current_q = questions[st.session_state.q_index]
 
 # プログレス表示
 st.caption(f"問題 {st.session_state.q_index + 1} / {total_q}")
 
-# 2. 問題文の表示
+# 2. 問題文の表示（Markdown仕様に合わせて改行コードの前に半角スペース2つを付与）
 question_text = current_q.get("question", "").replace("\n", "  \n")
 st.info(question_text)
 
@@ -82,10 +114,8 @@ else:
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
 # 4. 解答欄（テキストエリア）
-# 問題ごとに一意のキーを持たせることで、セッション中に一時的に入力を保持
-input_key = f"input_{selected_category}_{st.session_state.q_index}"
+input_key = f"input_{selected_chapter}_{selected_category}_{st.session_state.q_index}"
 
-# 初回表示時のみ、フォーマット（①など）を初期値としてセット
 if input_key not in st.session_state:
     st.session_state[input_key] = format_text
 
@@ -98,7 +128,6 @@ with st.expander("💡 解答を表示する"):
 st.write("---")
 
 # 6. ナビゲーションボタン
-# 端末の画面幅に合わせて均等に配置
 col1, col2, col3 = st.columns([1, 1, 1])
 
 with col1:
