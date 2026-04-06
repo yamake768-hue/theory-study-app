@@ -3,23 +3,42 @@ import json
 import os
 import glob
 
-# --- ページ設定 ---
-st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="centered")
+# --- ページ設定（wideに変更して画面を広く使う） ---
+st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="wide")
 
-# --- データ読み込み（複数ファイル対応） ---
+# --- UI改善用のカスタムCSSの注入 ---
+st.markdown(
+    """
+    <style>
+    /* 1. サイドバーのリサイズ枠を太くして掴みやすくする */
+    [data-testid="stSidebarResizer"] {
+        width: 15px !important;
+        background-color: rgba(150, 150, 150, 0.1) !important;
+    }
+    [data-testid="stSidebarResizer"]:hover {
+        background-color: rgba(150, 150, 150, 0.4) !important;
+    }
+    
+    /* 2. サイドバー表示時にテキストが裏に隠れないよう強制的に折り返す */
+    .stMarkdown p {
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# --- データ読み込み ---
 @st.cache_data
 def load_data():
     data = {}
-    # questionsフォルダ内の全JSONファイルを取得
-    # クラウド環境等でフォルダがない場合は空の辞書を返す
     if not os.path.exists("questions"):
         return data
         
     json_files = glob.glob("questions/*.json")
     
-    # ファイル名でソートして読み込む（第1章、第2章...と順番に並べるため）
     for file_path in sorted(json_files):
-        # ファイル名（拡張子なし）を章のタイトルとして取得
         chapter_name = os.path.splitext(os.path.basename(file_path))[0]
         with open(file_path, "r", encoding="utf-8") as f:
             chapter_data = json.load(f)
@@ -35,7 +54,7 @@ if not data:
 
 chapters = list(data.keys())
 
-# --- セッション状態（状態管理）の初期化 ---
+# --- セッション状態の初期化 ---
 if "chapter" not in st.session_state:
     st.session_state.chapter = chapters[0]
 if "category" not in st.session_state:
@@ -43,23 +62,70 @@ if "category" not in st.session_state:
 if "q_index" not in st.session_state:
     st.session_state.q_index = 0
 
-# ドロップダウン変更時のリセット処理
+# --- ナビゲーションロジック（章や単元をまたいで移動する機能） ---
+def get_next_state():
+    """次の問題のインデックス、単元、章を計算する"""
+    ch_idx = chapters.index(st.session_state.chapter)
+    cats = list(data[st.session_state.chapter].keys())
+    cat_idx = cats.index(st.session_state.category)
+    q_idx = st.session_state.q_index
+    
+    # 同じ単元内にまだ次の問題がある場合
+    if q_idx < len(data[st.session_state.chapter][st.session_state.category]) - 1:
+        return st.session_state.chapter, st.session_state.category, q_idx + 1
+    # 単元の最後の場合 -> 次の単元の1問目へ
+    if cat_idx < len(cats) - 1:
+        return st.session_state.chapter, cats[cat_idx + 1], 0
+    # 章の最後の場合 -> 次の章の最初の単元の1問目へ
+    if ch_idx < len(chapters) - 1:
+        next_ch = chapters[ch_idx + 1]
+        next_cat = list(data[next_ch].keys())[0]
+        return next_ch, next_cat, 0
+    # 全問題の最後
+    return None
+
+def get_prev_state():
+    """前の問題のインデックス、単元、章を計算する"""
+    ch_idx = chapters.index(st.session_state.chapter)
+    cats = list(data[st.session_state.chapter].keys())
+    cat_idx = cats.index(st.session_state.category)
+    q_idx = st.session_state.q_index
+    
+    # 同じ単元内に前の問題がある場合
+    if q_idx > 0:
+        return st.session_state.chapter, st.session_state.category, q_idx - 1
+    # 単元の最初の場合 -> 前の単元の最後の問題へ
+    if cat_idx > 0:
+        prev_cat = cats[cat_idx - 1]
+        last_q_idx = len(data[st.session_state.chapter][prev_cat]) - 1
+        return st.session_state.chapter, prev_cat, last_q_idx
+    # 章の最初の場合 -> 前の章の最後の単元の最後の問題へ
+    if ch_idx > 0:
+        prev_ch = chapters[ch_idx - 1]
+        prev_cat = list(data[prev_ch].keys())[-1]
+        last_q_idx = len(data[prev_ch][prev_cat]) - 1
+        return prev_ch, prev_cat, last_q_idx
+    # 全問題の最初
+    return None
+
+def go_next():
+    next_state = get_next_state()
+    if next_state:
+        st.session_state.chapter, st.session_state.category, st.session_state.q_index = next_state
+
+def go_prev():
+    prev_state = get_prev_state()
+    if prev_state:
+        st.session_state.chapter, st.session_state.category, st.session_state.q_index = prev_state
+
+# ドロップダウンを手動で操作した時のリセット処理
 def on_dropdown_change():
     st.session_state.q_index = 0
-
-# ボタン用のコールバック関数
-def go_prev():
-    if st.session_state.q_index > 0:
-        st.session_state.q_index -= 1
-
-def go_next(total_q):
-    if st.session_state.q_index < total_q - 1:
-        st.session_state.q_index += 1
 
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# 1. 章と単元の選択（サイドバーに移動してスマホ最適化）
+# 1. 章と単元の選択（サイドバー）
 with st.sidebar:
     st.header("メニュー")
     selected_chapter = st.selectbox(
@@ -69,7 +135,6 @@ with st.sidebar:
         on_change=on_dropdown_change
     )
 
-    # 選択された章に属する単元リストを取得
     categories = list(data[selected_chapter].keys())
 
     selected_category = st.selectbox(
@@ -91,7 +156,7 @@ current_q = questions[st.session_state.q_index]
 # プログレス表示
 st.caption(f"問題 {st.session_state.q_index + 1} / {total_q}")
 
-# 2. 問題文の表示（Markdown仕様に合わせて改行コードの前に半角スペース2つを付与）
+# 2. 問題文の表示
 question_text = current_q.get("question", "").replace("\n", "  \n")
 st.info(question_text)
 
@@ -121,7 +186,6 @@ user_ans = st.text_area("解答を入力:", key=input_key, height=200, label_vis
 
 # 5. 解答の表示（アコーディオン）
 with st.expander("💡 解答を表示する"):
-    # 解答のテキストもMarkdownの改行仕様（半角スペース2つ追加）に変換して縦並びに
     answer_text = current_q.get("answer", "解答データがありません。").replace("\n", "  \n")
     st.success(answer_text)
 
@@ -130,11 +194,15 @@ st.write("---")
 # 6. ナビゲーションボタン
 col1, col2, col3 = st.columns([1, 1, 1])
 
+# 最初/最後の問題かどうかでボタンを無効化する判定
+disable_prev = (get_prev_state() is None)
+disable_next = (get_next_state() is None)
+
 with col1:
     st.button(
         "◀ 戻る",
         on_click=go_prev,
-        disabled=(st.session_state.q_index == 0),
+        disabled=disable_prev,
         use_container_width=True
     )
 
@@ -142,7 +210,6 @@ with col3:
     st.button(
         "次へ ▶",
         on_click=go_next,
-        args=(total_q,),
-        disabled=(st.session_state.q_index == total_q - 1),
+        disabled=disable_next,
         use_container_width=True
     )
