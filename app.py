@@ -153,14 +153,32 @@ if st.session_state.q_index >= total_q:
 
 current_q = questions[st.session_state.q_index]
 
-# プログレス表示
-st.caption(f"問題 {st.session_state.q_index + 1} / {total_q}")
+# 2. ナビゲーションとプログレス（問題文の上部にコンパクトに配置）
+disable_prev = (get_prev_state() is None)
+disable_next = (get_next_state() is None)
 
-# 2. 問題文の表示
+# カラムの幅を [1 : 1 : 5] の比率で分割し、ボタンを左に寄せて小さくする
+col_prev, col_next, col_prog = st.columns([1, 1, 5])
+
+with col_prev:
+    st.button("◀ 戻る", on_click=go_prev, disabled=disable_prev, use_container_width=True)
+
+with col_next:
+    st.button("次へ ▶", on_click=go_next, disabled=disable_next, use_container_width=True)
+
+with col_prog:
+    # 右寄せで問題の進捗を表示し、ボタンの高さと合うように余白を調整
+    st.markdown(
+        f"<div style='text-align: right; padding-top: 10px; color: gray; font-size: 0.9em;'>"
+        f"問題 {st.session_state.q_index + 1} / {total_q}</div>", 
+        unsafe_allow_html=True
+    )
+
+# 3. 問題文の表示
 question_text = current_q.get("question", "").replace("\n", "  \n")
 st.info(question_text)
 
-# 3. 解答の目安を計算・表示
+# 4. 解答の目安を計算・表示
 format_text = current_q.get("format", "")
 expected_lines = current_q.get("expected_lines", 5)
 
@@ -176,7 +194,7 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# 4. 解答欄（テキストエリア）
+# 5. 解答欄（テキストエリア）
 input_key = f"input_{selected_chapter}_{selected_category}_{st.session_state.q_index}"
 
 if input_key not in st.session_state:
@@ -184,32 +202,9 @@ if input_key not in st.session_state:
 
 user_ans = st.text_area("解答を入力:", key=input_key, height=200, label_visibility="collapsed")
 
-# 5. 解答の表示（アコーディオン）
+# 6. 解答の表示（アコーディオン）
 with st.expander("💡 解答を表示する"):
     answer_text = current_q.get("answer", "解答データがありません。").replace("\n", "  \n")
     st.success(answer_text)
 
 st.write("---")
-
-# 6. ナビゲーションボタン
-col1, col2, col3 = st.columns([1, 1, 1])
-
-# 最初/最後の問題かどうかでボタンを無効化する判定
-disable_prev = (get_prev_state() is None)
-disable_next = (get_next_state() is None)
-
-with col1:
-    st.button(
-        "◀ 戻る",
-        on_click=go_prev,
-        disabled=disable_prev,
-        use_container_width=True
-    )
-
-with col3:
-    st.button(
-        "次へ ▶",
-        on_click=go_next,
-        disabled=disable_next,
-        use_container_width=True
-    )
