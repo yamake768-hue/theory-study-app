@@ -59,10 +59,9 @@ def go_next(total_q):
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# 1. 章と単元の選択（2段階ドロップダウン）
-col_ch, col_cat = st.columns(2) # PCやタブレットでは横並び、スマホでは自動で縦並びになります
-
-with col_ch:
+# 1. 章と単元の選択（サイドバーに移動してスマホ最適化）
+with st.sidebar:
+    st.header("メニュー")
     selected_chapter = st.selectbox(
         "章を選択",
         chapters,
@@ -70,10 +69,9 @@ with col_ch:
         on_change=on_dropdown_change
     )
 
-# 選択された章に属する単元リストを取得
-categories = list(data[selected_chapter].keys())
+    # 選択された章に属する単元リストを取得
+    categories = list(data[selected_chapter].keys())
 
-with col_cat:
     selected_category = st.selectbox(
         "単元を選択",
         categories,
@@ -123,6 +121,7 @@ user_ans = st.text_area("解答を入力:", key=input_key, height=200, label_vis
 
 # 5. 解答の表示（アコーディオン）
 with st.expander("💡 解答を表示する"):
+    # 解答のテキストもMarkdownの改行仕様（半角スペース2つ追加）に変換して縦並びに
     answer_text = current_q.get("answer", "解答データがありません。").replace("\n", "  \n")
     st.success(answer_text)
 
