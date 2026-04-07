@@ -20,16 +20,9 @@ st.markdown(
     }
     
     /* 2. サイドバー表示時にテキストが裏に隠れないよう強制的に折り返す */
-    .stMarkdown p {
+    .stMarkdown p, .stMarkdown div {
         word-wrap: break-word !important;
         overflow-wrap: break-word !important;
-    }
-    
-    /* 3. 【追加】Markdownの太字（strongタグ）を下線（underline）にするハック */
-    /* これにより、JSONデータ内で ** で囲んだ部分が下線になります */
-    .stMarkdown strong {
-        font-weight: normal !important; /* 太字は解除する */
-        text-decoration: underline !important; /* 下線を引く */
     }
     </style>
     """,
@@ -181,9 +174,16 @@ with col_prog:
         unsafe_allow_html=True
     )
 
-# 3. 問題文の表示（Markdown仕様に合わせて改行コードの前に半角スペース2つを付与）
-question_text = current_q.get("question", "").replace("\n", "  \n")
-st.info(question_text)
+# 3. 問題文の表示（HTML仕様に完全移行し、<u>タグで下線が引けるようにする）
+question_text = current_q.get("question", "").replace("\n", "<br>") # 改行も<br>に変換
+st.markdown(
+    f"""
+    <div style="background-color: #f0f8ff; padding: 1.5rem; border-radius: 0.5rem; color: #1f2937; margin-bottom: 1rem; border-left: 5px solid #0068c9; line-height: 1.6;">
+        {question_text}
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 # 4. 解答の目安を計算・表示
 format_text = current_q.get("format", "")
