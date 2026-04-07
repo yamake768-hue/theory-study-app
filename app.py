@@ -24,6 +24,13 @@ st.markdown(
         word-wrap: break-word !important;
         overflow-wrap: break-word !important;
     }
+    
+    /* 3. 【追加】Markdownの太字（strongタグ）を下線（underline）にするハック */
+    /* これにより、JSONデータ内で ** で囲んだ部分が下線になります */
+    .stMarkdown strong {
+        font-weight: normal !important; /* 太字は解除する */
+        text-decoration: underline !important; /* 下線を引く */
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -174,7 +181,7 @@ with col_prog:
         unsafe_allow_html=True
     )
 
-# 3. 問題文の表示
+# 3. 問題文の表示（Markdown仕様に合わせて改行コードの前に半角スペース2つを付与）
 question_text = current_q.get("question", "").replace("\n", "  \n")
 st.info(question_text)
 
