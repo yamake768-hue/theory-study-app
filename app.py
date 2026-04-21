@@ -63,114 +63,99 @@ if "category" not in st.session_state:
 if "q_index" not in st.session_state:
     st.session_state.q_index = 0
 
-# 【追加】誤爆防止用：前回の章・単元を記憶する変数
-if "prev_chapter" not in st.session_state:
-    st.session_state.prev_chapter = st.session_state.chapter
-if "prev_category" not in st.session_state:
-    st.session_state.prev_category = st.session_state.category
+# （安全対策）データ構造が変わった際にエラーを防ぐ
+if st.session_state.chapter not in data:
+    st.session_state.chapter = chapters[0]
+if st.session_state.category not in data[st.session_state.chapter]:
+    st.session_state.category = list(data[st.session_state.chapter].keys())[0]
 
-# --- ナビゲーションロジック ---
-def get_next_state():
+# --- 【超重要】手動同期型のサイドバー（ワープバグ対策） ---
+with st.sidebar:
+    st.header("メニュー")
+    
+    # 章の選択
+    ch_idx = chapters.index(st.session_state.chapter)
+    selected_chapter = st.selectbox("章を選択", chapters, index=ch_idx)
+    
+    # もしプルダウンが手で変更されたら、状態を更新して強制リロード
+    if selected_chapter != st.session_state.chapter:
+        st.session_state.chapter = selected_chapter
+        st.session_state.category = list(data[selected_chapter].keys())[0]
+        st.session_state.q_index = 0
+        st.rerun()
+
+    # 単元の選択
+    categories = list(data[st.session_state.chapter].keys())
+    cat_idx = categories.index(st.session_state.category) if st.session_state.category in categories else 0
+    selected_category = st.selectbox("単元を選択", categories, index=cat_idx)
+    
+    # もしプルダウンが手で変更されたら、状態を更新して強制リロード
+    if selected_category != st.session_state.category:
+        st.session_state.category = selected_category
+        st.session_state.q_index = 0
+        st.rerun()
+
+# --- ボタンのアクション ---
+def go_next():
     ch_idx = chapters.index(st.session_state.chapter)
     cats = list(data[st.session_state.chapter].keys())
     cat_idx = cats.index(st.session_state.category)
     q_idx = st.session_state.q_index
     
     if q_idx < len(data[st.session_state.chapter][st.session_state.category]) - 1:
-        return st.session_state.chapter, st.session_state.category, q_idx + 1
-    if cat_idx < len(cats) - 1:
-        return st.session_state.chapter, cats[cat_idx + 1], 0
-    if ch_idx < len(chapters) - 1:
+        st.session_state.q_index += 1
+    elif cat_idx < len(cats) - 1:
+        st.session_state.category = cats[cat_idx + 1]
+        st.session_state.q_index = 0
+    elif ch_idx < len(chapters) - 1:
         next_ch = chapters[ch_idx + 1]
-        next_cat = list(data[next_ch].keys())[0]
-        return next_ch, next_cat, 0
-    return None
+        st.session_state.chapter = next_ch
+        st.session_state.category = list(data[next_ch].keys())[0]
+        st.session_state.q_index = 0
 
-def get_prev_state():
+def go_prev():
     ch_idx = chapters.index(st.session_state.chapter)
     cats = list(data[st.session_state.chapter].keys())
     cat_idx = cats.index(st.session_state.category)
     q_idx = st.session_state.q_index
     
     if q_idx > 0:
-        return st.session_state.chapter, st.session_state.category, q_idx - 1
-    if cat_idx > 0:
+        st.session_state.q_index -= 1
+    elif cat_idx > 0:
         prev_cat = cats[cat_idx - 1]
-        last_q_idx = len(data[st.session_state.chapter][prev_cat]) - 1
-        return st.session_state.chapter, prev_cat, last_q_idx
-    if ch_idx > 0:
+        st.session_state.category = prev_cat
+        st.session_state.q_index = len(data[st.session_state.chapter][prev_cat]) - 1
+    elif ch_idx > 0:
         prev_ch = chapters[ch_idx - 1]
         prev_cat = list(data[prev_ch].keys())[-1]
-        last_q_idx = len(data[prev_ch][prev_cat]) - 1
-        return prev_ch, prev_cat, last_q_idx
-    return None
-
-# 【修正】ボタンで移動した時は、前回記憶(prev)も一緒に更新して誤爆を防ぐ
-def go_next():
-    next_state = get_next_state()
-    if next_state:
-        st.session_state.chapter, st.session_state.category, st.session_state.q_index = next_state
-        st.session_state.prev_chapter = next_state[0]
-        st.session_state.prev_category = next_state[1]
-
-def go_prev():
-    prev_state = get_prev_state()
-    if prev_state:
-        st.session_state.chapter, st.session_state.category, st.session_state.q_index = prev_state
-        st.session_state.prev_chapter = prev_state[0]
-        st.session_state.prev_category = prev_state[1]
+        st.session_state.chapter = prev_ch
+        st.session_state.category = prev_cat
+        st.session_state.q_index = len(data[prev_ch][prev_cat]) - 1
 
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# 1. 章と単元の選択（サイドバー）
-# ※ on_change コールバックを削除し、誤爆を防止
-with st.sidebar:
-    st.header("メニュー")
-    selected_chapter = st.selectbox(
-        "章を選択",
-        chapters,
-        key="chapter"
-    )
-
-    categories = list(data[selected_chapter].keys())
-    
-    # 章が切り替わった時に単元リストが矛盾しないための安全対策
-    if st.session_state.category not in categories:
-        st.session_state.category = categories[0]
-
-    selected_category = st.selectbox(
-        "単元を選択",
-        categories,
-        key="category"
-    )
-
-# 【追加】本当にユーザーが手でプルダウンを変更した時だけ、1問目(0)にリセットする
-if (st.session_state.chapter != st.session_state.prev_chapter) or (st.session_state.category != st.session_state.prev_category):
-    st.session_state.q_index = 0
-    st.session_state.prev_chapter = st.session_state.chapter
-    st.session_state.prev_category = st.session_state.category
-
-# データ取得
 questions = data[st.session_state.chapter][st.session_state.category]
 total_q = len(questions)
 
-if st.session_state.q_index >= total_q:
-    st.session_state.q_index = 0
-
-current_q = questions[st.session_state.q_index]
-
 # 2. ナビゲーションとプログレス
-disable_prev = (get_prev_state() is None)
-disable_next = (get_next_state() is None)
+# 先頭・末尾の判定
+is_first = (chapters.index(st.session_state.chapter) == 0 and 
+            list(data[st.session_state.chapter].keys()).index(st.session_state.category) == 0 and 
+            st.session_state.q_index == 0)
+
+is_last_ch = (chapters.index(st.session_state.chapter) == len(chapters) - 1)
+is_last_cat = (list(data[st.session_state.chapter].keys()).index(st.session_state.category) == len(data[st.session_state.chapter].keys()) - 1)
+is_last_q = (st.session_state.q_index == total_q - 1)
+is_last = (is_last_ch and is_last_cat and is_last_q)
 
 col_prev, col_next, col_prog = st.columns([1, 1, 5])
 
 with col_prev:
-    st.button("◀ 戻る", on_click=go_prev, disabled=disable_prev, use_container_width=True)
+    st.button("◀ 戻る", on_click=go_prev, disabled=is_first, use_container_width=True)
 
 with col_next:
-    st.button("次へ ▶", on_click=go_next, disabled=disable_next, use_container_width=True)
+    st.button("次へ ▶", on_click=go_next, disabled=is_last, use_container_width=True)
 
 with col_prog:
     st.markdown(
@@ -180,6 +165,7 @@ with col_prog:
     )
 
 # 3. 問題文の表示
+current_q = questions[st.session_state.q_index]
 question_text = current_q.get("question", "").replace("\n", "<br>")
 st.markdown(
     f"""
