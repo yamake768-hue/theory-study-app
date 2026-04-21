@@ -55,43 +55,74 @@ if not data:
 
 chapters = list(data.keys())
 
-# --- セッション状態の初期化（現在表示している問題の管理） ---
-if "current_ch" not in st.session_state:
-    st.session_state.current_ch = chapters[0]
-if "current_cat" not in st.session_state:
-    st.session_state.current_cat = list(data[chapters[0]].keys())[0]
-if "q_index" not in st.session_state:
+# --- 【重要】セッション状態の初期化（ワープ対策の要） ---
+if "initialized" not in st.session_state:
+    first_ch = chapters[0]
+    first_cat = list(data[first_ch].keys())[0]
+    
+    st.session_state.current_ch = first_ch
+    st.session_state.current_cat = first_cat
     st.session_state.q_index = 0
+    
+    # 現在の問題IDと、解答を保存する辞書
+    st.session_state.active_q_id = f"{first_ch}__{first_cat}__0"
+    st.session_state.answers = {}
+    
+    # 最初の解答欄のフォーマットをセット
+    fmt = data[first_ch][first_cat][0].get("format", "")
+    st.session_state.user_input_area = fmt
+    
+    st.session_state.initialized = True
+
+# --- 状態管理・保存ロジック ---
+def save_answer():
+    """現在テキストエリアに入力されている文字を保存する"""
+    st.session_state.answers[st.session_state.active_q_id] = st.session_state.user_input_area
+
+def update_active_state(ch, cat, q_idx):
+    """次の問題のフォーマット（または保存された過去の解答）をテキストエリアに読み込む"""
+    new_id = f"{ch}__{cat}__{q_idx}"
+    st.session_state.active_q_id = new_id
+    
+    if new_id in st.session_state.answers:
+        st.session_state.user_input_area = st.session_state.answers[new_id]
+    else:
+        st.session_state.user_input_area = data[ch][cat][q_idx].get("format", "")
 
 # --- ナビゲーションロジック ---
 def get_next_state():
-    ch_idx = chapters.index(st.session_state.current_ch)
-    cats = list(data[st.session_state.current_ch].keys())
-    cat_idx = cats.index(st.session_state.current_cat)
+    ch = st.session_state.current_ch
+    cat = st.session_state.current_cat
     q_idx = st.session_state.q_index
     
-    if q_idx < len(data[st.session_state.current_ch][st.session_state.current_cat]) - 1:
-        return st.session_state.current_ch, st.session_state.current_cat, q_idx + 1
+    ch_idx = chapters.index(ch)
+    cats = list(data[ch].keys())
+    cat_idx = cats.index(cat)
+    
+    if q_idx < len(data[ch][cat]) - 1:
+        return ch, cat, q_idx + 1
     if cat_idx < len(cats) - 1:
-        return st.session_state.current_ch, cats[cat_idx + 1], 0
+        return ch, cats[cat_idx + 1], 0
     if ch_idx < len(chapters) - 1:
         next_ch = chapters[ch_idx + 1]
-        next_cat = list(data[next_ch].keys())[0]
-        return next_ch, next_cat, 0
+        return next_ch, list(data[next_ch].keys())[0], 0
     return None
 
 def get_prev_state():
-    ch_idx = chapters.index(st.session_state.current_ch)
-    cats = list(data[st.session_state.current_ch].keys())
-    cat_idx = cats.index(st.session_state.current_cat)
+    ch = st.session_state.current_ch
+    cat = st.session_state.current_cat
     q_idx = st.session_state.q_index
     
+    ch_idx = chapters.index(ch)
+    cats = list(data[ch].keys())
+    cat_idx = cats.index(cat)
+    
     if q_idx > 0:
-        return st.session_state.current_ch, st.session_state.current_cat, q_idx - 1
+        return ch, cat, q_idx - 1
     if cat_idx > 0:
         prev_cat = cats[cat_idx - 1]
-        last_q_idx = len(data[st.session_state.current_ch][prev_cat]) - 1
-        return st.session_state.current_ch, prev_cat, last_q_idx
+        last_q_idx = len(data[ch][prev_cat]) - 1
+        return ch, prev_cat, last_q_idx
     if ch_idx > 0:
         prev_ch = chapters[ch_idx - 1]
         prev_cat = list(data[prev_ch].keys())[-1]
@@ -100,50 +131,54 @@ def get_prev_state():
     return None
 
 def go_next():
+    save_answer()
     next_state = get_next_state()
     if next_state:
-        st.session_state.current_ch = next_state[0]
-        st.session_state.current_cat = next_state[1]
-        st.session_state.q_index = next_state[2]
+        st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index = next_state
+        update_active_state(*next_state)
 
 def go_prev():
+    save_answer()
     prev_state = get_prev_state()
     if prev_state:
-        st.session_state.current_ch = prev_state[0]
-        st.session_state.current_cat = prev_state[1]
-        st.session_state.q_index = prev_state[2]
+        st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index = prev_state
+        update_active_state(*prev_state)
 
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# 1. 完全に独立させた手動同期のサイドバー（これでワープバグが消滅します）
+# 1. 完全に安全な手動同期サイドバー
 with st.sidebar:
     st.header("メニュー")
-    st.markdown("<p style='font-size:0.8em; color:gray;'>章・単元を選んだ後、「この単元を解く」ボタンを押すと移動します。</p>", unsafe_allow_html=True)
     
-    # 選択用の変数（メイン画面にはまだ影響を与えない）
-    temp_ch = st.selectbox("章を選択", chapters, index=chapters.index(st.session_state.current_ch))
+    # 章の選択
+    ch_idx = chapters.index(st.session_state.current_ch)
+    selected_ch = st.selectbox("章を選択", chapters, index=ch_idx)
     
-    temp_cats = list(data[temp_ch].keys())
-    # 単元リストの中に現在の単元があればそれを、なければ1番目を初期表示
-    default_cat_idx = temp_cats.index(st.session_state.current_cat) if (temp_ch == st.session_state.current_ch and st.session_state.current_cat in temp_cats) else 0
-    temp_cat = st.selectbox("単元を選択", temp_cats, index=default_cat_idx)
-    
-    # このボタンを押した時だけ、初めてメイン画面が切り替わる
-    if st.button("この単元を解く", type="primary", use_container_width=True):
-        st.session_state.current_ch = temp_ch
-        st.session_state.current_cat = temp_cat
+    if selected_ch != st.session_state.current_ch:
+        save_answer()
+        st.session_state.current_ch = selected_ch
+        st.session_state.current_cat = list(data[selected_ch].keys())[0]
         st.session_state.q_index = 0
+        update_active_state(st.session_state.current_ch, st.session_state.current_cat, 0)
         st.rerun()
 
+    # 単元の選択
+    cats = list(data[st.session_state.current_ch].keys())
+    cat_idx = cats.index(st.session_state.current_cat) if st.session_state.current_cat in cats else 0
+    selected_cat = st.selectbox("単元を選択", cats, index=cat_idx)
+    
+    if selected_cat != st.session_state.current_cat:
+        save_answer()
+        st.session_state.current_cat = selected_cat
+        st.session_state.q_index = 0
+        update_active_state(st.session_state.current_ch, st.session_state.current_cat, 0)
+        st.rerun()
+
+# 2. ナビゲーションとプログレス
 questions = data[st.session_state.current_ch][st.session_state.current_cat]
 total_q = len(questions)
 
-# 安全対策
-if st.session_state.q_index >= total_q:
-    st.session_state.q_index = 0
-
-# 2. ナビゲーションとプログレス
 is_first = (get_prev_state() is None)
 is_last = (get_next_state() is None)
 
@@ -190,13 +225,9 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# 5. 解答欄
-input_key = f"input_{st.session_state.current_ch}_{st.session_state.current_cat}_{st.session_state.q_index}"
-
-if input_key not in st.session_state:
-    st.session_state[input_key] = format_text
-
-user_ans = st.text_area("解答を入力:", key=input_key, height=200, label_visibility="collapsed")
+# 5. 【究極の対策】固定IDを持つ解答欄
+# keyを固定することで、Safariによる入力欄の破壊・強制リロードを完全に防ぎます
+user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
 
 # 6. 解答の表示
 with st.expander("💡 解答を表示する"):
