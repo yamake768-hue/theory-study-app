@@ -55,32 +55,35 @@ if not data:
 
 chapters = list(data.keys())
 
-# --- 【重要】セッション状態の初期化（ワープ対策の要） ---
+# --- 【究極のワープ対策】URLパラメータによる状態の復元 ---
 if "initialized" not in st.session_state:
-    first_ch = chapters[0]
-    first_cat = list(data[first_ch].keys())[0]
+    params = st.query_params
+    url_ch = params.get("ch", chapters[0])
+    url_cat = params.get("cat", "")
+    try:
+        url_q = int(params.get("q", 0))
+    except ValueError:
+        url_q = 0
+        
+    st.session_state.current_ch = url_ch if url_ch in data else chapters[0]
+    valid_cats = list(data[st.session_state.current_ch].keys())
+    st.session_state.current_cat = url_cat if url_cat in valid_cats else valid_cats[0]
     
-    st.session_state.current_ch = first_ch
-    st.session_state.current_cat = first_cat
-    st.session_state.q_index = 0
+    valid_q_len = len(data[st.session_state.current_ch][st.session_state.current_cat])
+    st.session_state.q_index = url_q if 0 <= url_q < valid_q_len else 0
     
-    # 現在の問題IDと、解答を保存する辞書
-    st.session_state.active_q_id = f"{first_ch}__{first_cat}__0"
+    st.session_state.active_q_id = f"{st.session_state.current_ch}__{st.session_state.current_cat}__{st.session_state.q_index}"
     st.session_state.answers = {}
     
-    # 最初の解答欄のフォーマットをセット
-    fmt = data[first_ch][first_cat][0].get("format", "")
+    fmt = data[st.session_state.current_ch][st.session_state.current_cat][st.session_state.q_index].get("format", "")
     st.session_state.user_input_area = fmt
     
     st.session_state.initialized = True
 
-# --- 状態管理・保存ロジック ---
 def save_answer():
-    """現在テキストエリアに入力されている文字を保存する"""
     st.session_state.answers[st.session_state.active_q_id] = st.session_state.user_input_area
 
 def update_active_state(ch, cat, q_idx):
-    """次の問題のフォーマット（または保存された過去の解答）をテキストエリアに読み込む"""
     new_id = f"{ch}__{cat}__{q_idx}"
     st.session_state.active_q_id = new_id
     
@@ -88,13 +91,17 @@ def update_active_state(ch, cat, q_idx):
         st.session_state.user_input_area = st.session_state.answers[new_id]
     else:
         st.session_state.user_input_area = data[ch][cat][q_idx].get("format", "")
+        
+    # URLを更新して履歴を自動セーブする
+    st.query_params["ch"] = ch
+    st.query_params["cat"] = cat
+    st.query_params["q"] = str(q_idx)
 
 # --- ナビゲーションロジック ---
 def get_next_state():
     ch = st.session_state.current_ch
     cat = st.session_state.current_cat
     q_idx = st.session_state.q_index
-    
     ch_idx = chapters.index(ch)
     cats = list(data[ch].keys())
     cat_idx = cats.index(cat)
@@ -112,7 +119,6 @@ def get_prev_state():
     ch = st.session_state.current_ch
     cat = st.session_state.current_cat
     q_idx = st.session_state.q_index
-    
     ch_idx = chapters.index(ch)
     cats = list(data[ch].keys())
     cat_idx = cats.index(cat)
@@ -147,32 +153,25 @@ def go_prev():
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# 1. 完全に安全な手動同期サイドバー
-with st.sidebar:
+# 1. 完全に安全なフォーム型サイドバー
+with st.sidebar.form("nav_form"):
     st.header("メニュー")
     
-    # 章の選択
     ch_idx = chapters.index(st.session_state.current_ch)
     selected_ch = st.selectbox("章を選択", chapters, index=ch_idx)
     
-    if selected_ch != st.session_state.current_ch:
-        save_answer()
-        st.session_state.current_ch = selected_ch
-        st.session_state.current_cat = list(data[selected_ch].keys())[0]
-        st.session_state.q_index = 0
-        update_active_state(st.session_state.current_ch, st.session_state.current_cat, 0)
-        st.rerun()
-
-    # 単元の選択
-    cats = list(data[st.session_state.current_ch].keys())
-    cat_idx = cats.index(st.session_state.current_cat) if st.session_state.current_cat in cats else 0
+    cats = list(data[selected_ch].keys())
+    cat_idx = cats.index(st.session_state.current_cat) if (selected_ch == st.session_state.current_ch and st.session_state.current_cat in cats) else 0
     selected_cat = st.selectbox("単元を選択", cats, index=cat_idx)
     
-    if selected_cat != st.session_state.current_cat:
+    # Submitボタンが押された時だけ処理する
+    submitted = st.form_submit_button("この単元を解く", type="primary", use_container_width=True)
+    if submitted:
         save_answer()
+        st.session_state.current_ch = selected_ch
         st.session_state.current_cat = selected_cat
         st.session_state.q_index = 0
-        update_active_state(st.session_state.current_ch, st.session_state.current_cat, 0)
+        update_active_state(selected_ch, selected_cat, 0)
         st.rerun()
 
 # 2. ナビゲーションとプログレス
@@ -225,8 +224,7 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# 5. 【究極の対策】固定IDを持つ解答欄
-# keyを固定することで、Safariによる入力欄の破壊・強制リロードを完全に防ぎます
+# 5. 解答欄
 user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
 
 # 6. 解答の表示
