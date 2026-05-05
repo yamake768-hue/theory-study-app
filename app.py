@@ -307,7 +307,7 @@ def toggle_bookmark():
         st.session_state.bookmarks.discard(q_id)
     save_bookmarks_to_cookie()
 
-st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, on_change=toggle_bookmark, key=f"chk_{q_id}")
+st.checkbox("問題をピン", value=is_checked, on_change=toggle_bookmark, key=f"chk_{q_id}")
 
 # 問題文の表示
 question_text = current_q.get("question", "").replace("\n", "<br>")
