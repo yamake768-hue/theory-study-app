@@ -2,20 +2,10 @@ import streamlit as st
 import json
 import os
 import glob
-from streamlit_cookies_manager import EncryptedCookieManager
+import requests
 
 # --- ページ設定 ---
 st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="wide")
-
-# --- Cookieマネージャーの設定（ブラウザにチェックを記憶させる） ---
-cookies = EncryptedCookieManager(
-    prefix="zaimu_app",
-    password="dummy_secure_password" # ここは変更しないでください
-)
-
-if not cookies.ready():
-    # クッキーの準備ができるまで一瞬処理を停止（リロード時のラグ対策）
-    st.stop()
 
 # --- UI改善用のカスタムCSS ---
 st.markdown(
@@ -66,22 +56,47 @@ if not data:
 
 chapters = list(data.keys())
 
-# --- お気に入り（チェック）データの読み込みと保存ロジック ---
-if "bookmarks" not in st.session_state:
-    saved_bookmarks = cookies.get("bookmarks")
-    if saved_bookmarks:
+# --- 【完全解決版】GitHub Gistを利用したクラウド保存ロジック ---
+def load_bookmarks():
+    if "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets:
+        headers = {
+            "Authorization": f"token {st.secrets['GITHUB_TOKEN']}",
+            "Accept": "application/vnd.github.v3+json"
+        }
         try:
-            st.session_state.bookmarks = set(json.loads(saved_bookmarks))
-        except:
-            st.session_state.bookmarks = set()
-    else:
-        st.session_state.bookmarks = set()
+            res = requests.get(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers)
+            if res.status_code == 200:
+                files = res.json().get("files", {})
+                if "bookmarks.json" in files:
+                    content = files["bookmarks.json"]["content"]
+                    return set(json.loads(content))
+        except Exception as e:
+            st.warning("クラウドからのチェック状態の読み込みに失敗しました。")
+    return set()
 
-def save_bookmarks_to_cookie():
-    cookies["bookmarks"] = json.dumps(list(st.session_state.bookmarks))
-    cookies.save()
+def save_bookmarks_to_server():
+    if "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets:
+        headers = {
+            "Authorization": f"token {st.secrets['GITHUB_TOKEN']}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        data = {
+            "files": {
+                "bookmarks.json": {
+                    "content": json.dumps(list(st.session_state.bookmarks))
+                }
+            }
+        }
+        try:
+            requests.patch(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers, json=data)
+        except Exception as e:
+            pass
 
-# --- 【究極のワープ対策】URLパラメータによる状態の復元 ---
+if "bookmarks" not in st.session_state:
+    st.session_state.bookmarks = load_bookmarks()
+
+
+# --- URLパラメータによる状態の復元 ---
 if "initialized" not in st.session_state:
     params = st.query_params
     url_ch = params.get("ch", chapters[0])
@@ -123,7 +138,7 @@ def update_active_state(ch, cat, q_idx):
     st.query_params["cat"] = cat
     st.query_params["q"] = str(q_idx)
 
-# --- ナビゲーションロジック（通常モード用） ---
+# --- ナビゲーションロジック ---
 def get_next_state():
     ch = st.session_state.current_ch
     cat = st.session_state.current_cat
@@ -169,7 +184,6 @@ st.title("財務諸表論 理論演習")
 with st.sidebar:
     st.header("メニュー")
     
-    # フィルターモードのトグル
     new_filter_mode = st.checkbox("☑ チェックした問題のみ表示", value=st.session_state.filter_mode)
     
     if new_filter_mode != st.session_state.filter_mode:
@@ -202,12 +216,11 @@ with st.sidebar:
 
 # --- モードに応じた問題データの抽出と操作 ---
 if st.session_state.filter_mode:
-    # 全問題の中からチェック済みのものをフラットなリストに抽出
     active_list = []
     for ch in chapters:
         for cat in data[ch].keys():
             for i, q in enumerate(data[ch][cat]):
-                temp_id = f"{ch}__{cat}__{i}"
+                temp_id = f"{ch}____{cat}____{i}" # ID区切り文字を安全なものに変更
                 if temp_id in st.session_state.bookmarks:
                     active_list.append((ch, cat, i, q, temp_id))
     
@@ -216,7 +229,6 @@ if st.session_state.filter_mode:
         st.warning("チェックされた問題がありません。左のメニューからチェックを外し、通常モードで問題にチェックを入れてください。")
         st.stop()
         
-    # チェックを外してリストが減った場合の安全対策
     if st.session_state.q_index >= total_q:
         st.session_state.q_index = total_q - 1
         
@@ -244,7 +256,6 @@ if st.session_state.filter_mode:
     display_cat = current_cat
 
 else:
-    # 通常モード
     questions = data[st.session_state.current_ch][st.session_state.current_cat]
     total_q = len(questions)
     
@@ -255,7 +266,7 @@ else:
     current_ch = st.session_state.current_ch
     current_cat = st.session_state.current_cat
     original_idx = st.session_state.q_index
-    q_id = f"{current_ch}__{current_cat}__{original_idx}"
+    q_id = f"{current_ch}____{current_cat}____{original_idx}" # IDの生成を修正
     
     is_first = (get_prev_state() is None)
     is_last = (get_next_state() is None)
@@ -276,7 +287,6 @@ else:
             
     display_ch = current_ch
     display_cat = current_cat
-
 
 # --- メイン画面描画 ---
 col_prev, col_next, col_prog = st.columns([1, 1, 5])
@@ -300,14 +310,14 @@ st.markdown(f"<span style='color:gray; font-size: 0.9em;'>【{display_ch}：{dis
 is_checked = q_id in st.session_state.bookmarks
 
 def toggle_bookmark():
-    # チェックボックスの値を取得して更新
     if st.session_state[f"chk_{q_id}"]:
         st.session_state.bookmarks.add(q_id)
     else:
         st.session_state.bookmarks.discard(q_id)
-    save_bookmarks_to_cookie()
+    # 外部サーバー(GitHub Gist)に直接保存する
+    save_bookmarks_to_server()
 
-st.checkbox("問題をピン", value=is_checked, on_change=toggle_bookmark, key=f"chk_{q_id}")
+st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, on_change=toggle_bookmark, key=f"chk_{q_id}")
 
 # 問題文の表示
 question_text = current_q.get("question", "").replace("\n", "<br>")
