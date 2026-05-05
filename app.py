@@ -2,9 +2,20 @@ import streamlit as st
 import json
 import os
 import glob
+from streamlit_cookies_manager import EncryptedCookieManager
 
 # --- ページ設定 ---
 st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="wide")
+
+# --- Cookieマネージャーの設定（ブラウザにチェックを記憶させる） ---
+cookies = EncryptedCookieManager(
+    prefix="zaimu_app",
+    password="dummy_secure_password" # ここは変更しないでください
+)
+
+if not cookies.ready():
+    # クッキーの準備ができるまで一瞬処理を停止（リロード時のラグ対策）
+    st.stop()
 
 # --- UI改善用のカスタムCSS ---
 st.markdown(
@@ -55,6 +66,21 @@ if not data:
 
 chapters = list(data.keys())
 
+# --- お気に入り（チェック）データの読み込みと保存ロジック ---
+if "bookmarks" not in st.session_state:
+    saved_bookmarks = cookies.get("bookmarks")
+    if saved_bookmarks:
+        try:
+            st.session_state.bookmarks = set(json.loads(saved_bookmarks))
+        except:
+            st.session_state.bookmarks = set()
+    else:
+        st.session_state.bookmarks = set()
+
+def save_bookmarks_to_cookie():
+    cookies["bookmarks"] = json.dumps(list(st.session_state.bookmarks))
+    cookies.save()
+
 # --- 【究極のワープ対策】URLパラメータによる状態の復元 ---
 if "initialized" not in st.session_state:
     params = st.query_params
@@ -79,6 +105,7 @@ if "initialized" not in st.session_state:
     st.session_state.user_input_area = fmt
     
     st.session_state.initialized = True
+    st.session_state.filter_mode = False
 
 def save_answer():
     st.session_state.answers[st.session_state.active_q_id] = st.session_state.user_input_area
@@ -92,12 +119,11 @@ def update_active_state(ch, cat, q_idx):
     else:
         st.session_state.user_input_area = data[ch][cat][q_idx].get("format", "")
         
-    # URLを更新して履歴を自動セーブする
     st.query_params["ch"] = ch
     st.query_params["cat"] = cat
     st.query_params["q"] = str(q_idx)
 
-# --- ナビゲーションロジック ---
+# --- ナビゲーションロジック（通常モード用） ---
 def get_next_state():
     ch = st.session_state.current_ch
     cat = st.session_state.current_cat
@@ -136,51 +162,123 @@ def get_prev_state():
         return prev_ch, prev_cat, last_q_idx
     return None
 
-def go_next():
-    save_answer()
-    next_state = get_next_state()
-    if next_state:
-        st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index = next_state
-        update_active_state(*next_state)
-
-def go_prev():
-    save_answer()
-    prev_state = get_prev_state()
-    if prev_state:
-        st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index = prev_state
-        update_active_state(*prev_state)
-
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# 1. 完全に安全なフォーム型サイドバー
-with st.sidebar.form("nav_form"):
+# サイドバー
+with st.sidebar:
     st.header("メニュー")
     
-    ch_idx = chapters.index(st.session_state.current_ch)
-    selected_ch = st.selectbox("章を選択", chapters, index=ch_idx)
+    # フィルターモードのトグル
+    new_filter_mode = st.checkbox("☑ チェックした問題のみ表示", value=st.session_state.filter_mode)
     
-    cats = list(data[selected_ch].keys())
-    cat_idx = cats.index(st.session_state.current_cat) if (selected_ch == st.session_state.current_ch and st.session_state.current_cat in cats) else 0
-    selected_cat = st.selectbox("単元を選択", cats, index=cat_idx)
-    
-    # Submitボタンが押された時だけ処理する
-    submitted = st.form_submit_button("この単元を解く", type="primary", use_container_width=True)
-    if submitted:
-        save_answer()
-        st.session_state.current_ch = selected_ch
-        st.session_state.current_cat = selected_cat
+    if new_filter_mode != st.session_state.filter_mode:
+        st.session_state.filter_mode = new_filter_mode
         st.session_state.q_index = 0
-        update_active_state(selected_ch, selected_cat, 0)
         st.rerun()
 
-# 2. ナビゲーションとプログレス
-questions = data[st.session_state.current_ch][st.session_state.current_cat]
-total_q = len(questions)
+    st.write("---")
 
-is_first = (get_prev_state() is None)
-is_last = (get_next_state() is None)
+    if st.session_state.filter_mode:
+        st.success("復習モード作動中")
+        st.markdown("<p style='font-size:0.8em; color:gray;'>チェックされた問題のみを順番に表示しています。章や単元の選択は現在無効です。</p>", unsafe_allow_html=True)
+    else:
+        with st.form("nav_form"):
+            ch_idx = chapters.index(st.session_state.current_ch)
+            selected_ch = st.selectbox("章を選択", chapters, index=ch_idx)
+            
+            cats = list(data[selected_ch].keys())
+            cat_idx = cats.index(st.session_state.current_cat) if (selected_ch == st.session_state.current_ch and st.session_state.current_cat in cats) else 0
+            selected_cat = st.selectbox("単元を選択", cats, index=cat_idx)
+            
+            submitted = st.form_submit_button("この単元を解く", type="primary", use_container_width=True)
+            if submitted:
+                save_answer()
+                st.session_state.current_ch = selected_ch
+                st.session_state.current_cat = selected_cat
+                st.session_state.q_index = 0
+                update_active_state(selected_ch, selected_cat, 0)
+                st.rerun()
 
+# --- モードに応じた問題データの抽出と操作 ---
+if st.session_state.filter_mode:
+    # 全問題の中からチェック済みのものをフラットなリストに抽出
+    active_list = []
+    for ch in chapters:
+        for cat in data[ch].keys():
+            for i, q in enumerate(data[ch][cat]):
+                temp_id = f"{ch}__{cat}__{i}"
+                if temp_id in st.session_state.bookmarks:
+                    active_list.append((ch, cat, i, q, temp_id))
+    
+    total_q = len(active_list)
+    if total_q == 0:
+        st.warning("チェックされた問題がありません。左のメニューからチェックを外し、通常モードで問題にチェックを入れてください。")
+        st.stop()
+        
+    # チェックを外してリストが減った場合の安全対策
+    if st.session_state.q_index >= total_q:
+        st.session_state.q_index = total_q - 1
+        
+    current_ch, current_cat, original_idx, current_q, q_id = active_list[st.session_state.q_index]
+    
+    if st.session_state.active_q_id != q_id:
+        update_active_state(current_ch, current_cat, original_idx)
+        
+    is_first = (st.session_state.q_index == 0)
+    is_last = (st.session_state.q_index == total_q - 1)
+    
+    def go_next():
+        save_answer()
+        st.session_state.q_index += 1
+        n_ch, n_cat, n_idx, _, _ = active_list[st.session_state.q_index]
+        update_active_state(n_ch, n_cat, n_idx)
+
+    def go_prev():
+        save_answer()
+        st.session_state.q_index -= 1
+        p_ch, p_cat, p_idx, _, _ = active_list[st.session_state.q_index]
+        update_active_state(p_ch, p_cat, p_idx)
+        
+    display_ch = current_ch
+    display_cat = current_cat
+
+else:
+    # 通常モード
+    questions = data[st.session_state.current_ch][st.session_state.current_cat]
+    total_q = len(questions)
+    
+    if st.session_state.q_index >= total_q:
+        st.session_state.q_index = 0
+        
+    current_q = questions[st.session_state.q_index]
+    current_ch = st.session_state.current_ch
+    current_cat = st.session_state.current_cat
+    original_idx = st.session_state.q_index
+    q_id = f"{current_ch}__{current_cat}__{original_idx}"
+    
+    is_first = (get_prev_state() is None)
+    is_last = (get_next_state() is None)
+    
+    def go_next():
+        save_answer()
+        next_state = get_next_state()
+        if next_state:
+            st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index = next_state
+            update_active_state(*next_state)
+
+    def go_prev():
+        save_answer()
+        prev_state = get_prev_state()
+        if prev_state:
+            st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index = prev_state
+            update_active_state(*prev_state)
+            
+    display_ch = current_ch
+    display_cat = current_cat
+
+
+# --- メイン画面描画 ---
 col_prev, col_next, col_prog = st.columns([1, 1, 5])
 
 with col_prev:
@@ -196,8 +294,22 @@ with col_prog:
         unsafe_allow_html=True
     )
 
-# 3. 問題文の表示
-current_q = questions[st.session_state.q_index]
+st.markdown(f"<span style='color:gray; font-size: 0.9em;'>【{display_ch}：{display_cat}】</span>", unsafe_allow_html=True)
+
+# チェックボックス機能
+is_checked = q_id in st.session_state.bookmarks
+
+def toggle_bookmark():
+    # チェックボックスの値を取得して更新
+    if st.session_state[f"chk_{q_id}"]:
+        st.session_state.bookmarks.add(q_id)
+    else:
+        st.session_state.bookmarks.discard(q_id)
+    save_bookmarks_to_cookie()
+
+st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, on_change=toggle_bookmark, key=f"chk_{q_id}")
+
+# 問題文の表示
 question_text = current_q.get("question", "").replace("\n", "<br>")
 st.markdown(
     f"""
@@ -208,7 +320,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# 4. 解答の目安
+# 解答の目安
 format_text = current_q.get("format", "")
 expected_lines = current_q.get("expected_lines", 5)
 
@@ -224,10 +336,10 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# 5. 解答欄
+# 解答欄
 user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
 
-# 6. 解答の表示
+# 解答の表示
 with st.expander("💡 解答を表示する"):
     answer_text = current_q.get("answer", "解答データがありません。").replace("\n", "  \n")
     st.success(answer_text)
