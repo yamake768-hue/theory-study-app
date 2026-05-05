@@ -326,11 +326,11 @@ def toggle_bookmark(current_id):
     # クラウドへ保存し、結果を通知する
     success, msg = save_bookmarks_to_server()
     if success:
-        st.toast("✅ クラウドにチェックを保存しました", icon="☁️")
+        st.toast("✅ ピンを保存しました", icon="☁️")
     else:
-        st.error(f"❌ 保存に失敗しました: {msg}")
+        st.error(f"❌ ピンに失敗しました: {msg}")
 
-st.checkbox("✅ この問題をチェックする（弱点・復習用）", 
+st.checkbox("この問題をピン", 
             value=is_checked, 
             on_change=toggle_bookmark, 
             args=(q_id,), 
