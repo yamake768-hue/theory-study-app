@@ -56,7 +56,7 @@ if not data:
 
 chapters = list(data.keys())
 
-# --- 【完全解決版】GitHub Gistを利用したクラウド保存ロジック ---
+# --- 【診断機能付き】GitHub Gistを利用したクラウド保存ロジック ---
 def load_bookmarks():
     if "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets:
         headers = {
@@ -70,27 +70,37 @@ def load_bookmarks():
                 if "bookmarks.json" in files:
                     content = files["bookmarks.json"]["content"]
                     return set(json.loads(content))
+            else:
+                st.error(f"【読込エラー】GitHubの認証に失敗しました (コード: {res.status_code})。Secretsの設定を見直してください。")
         except Exception as e:
-            st.warning("クラウドからのチェック状態の読み込みに失敗しました。")
+            st.error(f"【通信エラー】データの読み込みに失敗しました: {e}")
+    else:
+        st.warning("⚠️ GitHubの設定(Secrets)が見つかりません。チェックはクラウドに保存されません。")
     return set()
 
 def save_bookmarks_to_server():
-    if "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets:
-        headers = {
-            "Authorization": f"token {st.secrets['GITHUB_TOKEN']}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        data = {
-            "files": {
-                "bookmarks.json": {
-                    "content": json.dumps(list(st.session_state.bookmarks))
-                }
+    if "GITHUB_TOKEN" not in st.secrets or "GIST_ID" not in st.secrets:
+        return False, "設定(Secrets)にトークンまたはIDが登録されていません。"
+
+    headers = {
+        "Authorization": f"token {st.secrets['GITHUB_TOKEN']}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    data = {
+        "files": {
+            "bookmarks.json": {
+                "content": json.dumps(list(st.session_state.bookmarks))
             }
         }
-        try:
-            requests.patch(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers, json=data)
-        except Exception as e:
-            pass
+    }
+    try:
+        res = requests.patch(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers, json=data)
+        if res.status_code == 200:
+            return True, ""
+        else:
+            return False, f"APIエラー ({res.status_code}): {res.text}"
+    except Exception as e:
+        return False, f"通信エラー: {str(e)}"
 
 if "bookmarks" not in st.session_state:
     st.session_state.bookmarks = load_bookmarks()
@@ -180,12 +190,9 @@ def get_prev_state():
 # --- UI構築 ---
 st.title("財務諸表論 理論演習")
 
-# サイドバー
 with st.sidebar:
     st.header("メニュー")
-    
     new_filter_mode = st.checkbox("☑ チェックした問題のみ表示", value=st.session_state.filter_mode)
-    
     if new_filter_mode != st.session_state.filter_mode:
         st.session_state.filter_mode = new_filter_mode
         st.session_state.q_index = 0
@@ -214,13 +221,13 @@ with st.sidebar:
                 update_active_state(selected_ch, selected_cat, 0)
                 st.rerun()
 
-# --- モードに応じた問題データの抽出と操作 ---
+# --- モードに応じた問題データの抽出 ---
 if st.session_state.filter_mode:
     active_list = []
     for ch in chapters:
         for cat in data[ch].keys():
             for i, q in enumerate(data[ch][cat]):
-                temp_id = f"{ch}____{cat}____{i}" # ID区切り文字を安全なものに変更
+                temp_id = f"{ch}____{cat}____{i}"
                 if temp_id in st.session_state.bookmarks:
                     active_list.append((ch, cat, i, q, temp_id))
     
@@ -266,7 +273,7 @@ else:
     current_ch = st.session_state.current_ch
     current_cat = st.session_state.current_cat
     original_idx = st.session_state.q_index
-    q_id = f"{current_ch}____{current_cat}____{original_idx}" # IDの生成を修正
+    q_id = f"{current_ch}____{current_cat}____{original_idx}"
     
     is_first = (get_prev_state() is None)
     is_last = (get_next_state() is None)
@@ -306,18 +313,28 @@ with col_prog:
 
 st.markdown(f"<span style='color:gray; font-size: 0.9em;'>【{display_ch}：{display_cat}】</span>", unsafe_allow_html=True)
 
-# チェックボックス機能
+# --- チェックボックスと保存処理 ---
 is_checked = q_id in st.session_state.bookmarks
 
-def toggle_bookmark():
-    if st.session_state[f"chk_{q_id}"]:
-        st.session_state.bookmarks.add(q_id)
+def toggle_bookmark(current_id):
+    # チェック状態を判定して更新
+    if st.session_state[f"chk_{current_id}"]:
+        st.session_state.bookmarks.add(current_id)
     else:
-        st.session_state.bookmarks.discard(q_id)
-    # 外部サーバー(GitHub Gist)に直接保存する
-    save_bookmarks_to_server()
+        st.session_state.bookmarks.discard(current_id)
+    
+    # クラウドへ保存し、結果を通知する
+    success, msg = save_bookmarks_to_server()
+    if success:
+        st.toast("✅ クラウドにチェックを保存しました", icon="☁️")
+    else:
+        st.error(f"❌ 保存に失敗しました: {msg}")
 
-st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, on_change=toggle_bookmark, key=f"chk_{q_id}")
+st.checkbox("✅ この問題をチェックする（弱点・復習用）", 
+            value=is_checked, 
+            on_change=toggle_bookmark, 
+            args=(q_id,), 
+            key=f"chk_{q_id}")
 
 # 問題文の表示
 question_text = current_q.get("question", "").replace("\n", "<br>")
