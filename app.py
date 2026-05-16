@@ -3,6 +3,7 @@ import json
 import os
 import glob
 import requests
+from streamlit_drawable_canvas import st_canvas
 
 # --- ページ設定 ---
 st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="wide")
@@ -56,7 +57,7 @@ if not data:
 
 chapters = list(data.keys())
 
-# --- 【診断機能付き】GitHub Gistを利用したクラウド保存ロジック ---
+# --- GitHub Gistを利用したクラウド保存ロジック（チェック状態のみ） ---
 def load_bookmarks():
     if "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets:
         headers = {
@@ -70,23 +71,19 @@ def load_bookmarks():
                 if "bookmarks.json" in files:
                     content = files["bookmarks.json"]["content"]
                     return set(json.loads(content))
-            else:
-                st.error(f"【読込エラー】GitHubの認証に失敗しました (コード: {res.status_code})。Secretsの設定を見直してください。")
-        except Exception as e:
-            st.error(f"【通信エラー】データの読み込みに失敗しました: {e}")
-    else:
-        st.warning("⚠️ GitHubの設定(Secrets)が見つかりません。チェックはクラウドに保存されません。")
+        except Exception:
+            pass
     return set()
 
 def save_bookmarks_to_server():
     if "GITHUB_TOKEN" not in st.secrets or "GIST_ID" not in st.secrets:
-        return False, "設定(Secrets)にトークンまたはIDが登録されていません。"
+        return False, "Secrets未設定"
 
     headers = {
         "Authorization": f"token {st.secrets['GITHUB_TOKEN']}",
         "Accept": "application/vnd.github.v3+json"
     }
-    data = {
+    payload = {
         "files": {
             "bookmarks.json": {
                 "content": json.dumps(list(st.session_state.bookmarks))
@@ -94,11 +91,11 @@ def save_bookmarks_to_server():
         }
     }
     try:
-        res = requests.patch(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers, json=data)
+        res = requests.patch(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers, json=payload)
         if res.status_code == 200:
             return True, ""
         else:
-            return False, f"APIエラー ({res.status_code}): {res.text}"
+            return False, f"APIエラー ({res.status_code})"
     except Exception as e:
         return False, f"通信エラー: {str(e)}"
 
@@ -124,7 +121,7 @@ if "initialized" not in st.session_state:
     st.session_state.q_index = url_q if 0 <= url_q < valid_q_len else 0
     
     st.session_state.active_q_id = f"{st.session_state.current_ch}__{st.session_state.current_cat}__{st.session_state.q_index}"
-    st.session_state.answers = {}
+    st.session_state.answers = {} # ブラウザを開いている間だけの一時保存用
     
     fmt = data[st.session_state.current_ch][st.session_state.current_cat][st.session_state.q_index].get("format", "")
     st.session_state.user_input_area = fmt
@@ -139,6 +136,7 @@ def update_active_state(ch, cat, q_idx):
     new_id = f"{ch}__{cat}__{q_idx}"
     st.session_state.active_q_id = new_id
     
+    # セッション内に一時記憶があれば復元、なければ初期フォーマット
     if new_id in st.session_state.answers:
         st.session_state.user_input_area = st.session_state.answers[new_id]
     else:
@@ -313,28 +311,23 @@ with col_prog:
 
 st.markdown(f"<span style='color:gray; font-size: 0.9em;'>【{display_ch}：{display_cat}】</span>", unsafe_allow_html=True)
 
-# --- チェックボックスと保存処理 ---
+# チェックボックスと保存処理
 is_checked = q_id in st.session_state.bookmarks
+chk_key = f"chk_{q_id}"
+new_is_checked = st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, key=chk_key)
 
-def toggle_bookmark(current_id):
-    # チェック状態を判定して更新
-    if st.session_state[f"chk_{current_id}"]:
-        st.session_state.bookmarks.add(current_id)
+if new_is_checked != is_checked:
+    if new_is_checked:
+        st.session_state.bookmarks.add(q_id)
     else:
-        st.session_state.bookmarks.discard(current_id)
-    
-    # クラウドへ保存し、結果を通知する
+        st.session_state.bookmarks.discard(q_id)
+        
     success, msg = save_bookmarks_to_server()
     if success:
-        st.toast("✅ ピンを保存しました", icon="☁️")
+        st.toast("✅ クラウドにチェックを保存しました", icon="☁️")
     else:
-        st.error(f"❌ ピンに失敗しました: {msg}")
-
-st.checkbox("この問題をピン", 
-            value=is_checked, 
-            on_change=toggle_bookmark, 
-            args=(q_id,), 
-            key=f"chk_{q_id}")
+        st.error(f"❌ 保存に失敗しました: {msg}")
+    st.rerun()
 
 # 問題文の表示
 question_text = current_q.get("question", "").replace("\n", "<br>")
@@ -363,8 +356,37 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# 解答欄
-user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
+# --- タブによる入力方式の切り替え ---
+tab1, tab2 = st.tabs(["✍️ 解答入力（テキスト）", "📝 計算用紙（手書き）"])
+
+with tab1:
+    user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
+
+with tab2:
+    # ツールバー（太さ、色、全消去）
+    col_tool1, col_tool2, col_tool3 = st.columns([2, 2, 1])
+    with col_tool1:
+        stroke_width = st.slider("ペンの太さ", 1, 20, 2)
+    with col_tool2:
+        stroke_color = st.color_picker("ペンの色", "#000000")
+    with col_tool3:
+        # キャンバスリセット用のキー管理
+        if f"canvas_key_{q_id}" not in st.session_state:
+            st.session_state[f"canvas_key_{q_id}"] = 0
+        if st.button("🗑️ 全消去", use_container_width=True):
+            st.session_state[f"canvas_key_{q_id}"] += 1
+            st.rerun()
+
+    # 手書きキャンバスの描画
+    st_canvas(
+        fill_color="rgba(255, 255, 255, 0.0)",
+        stroke_width=stroke_width,
+        stroke_color=stroke_color,
+        background_color="#ffffff",
+        height=300,
+        drawing_mode="freedraw",
+        key=f"canvas_{q_id}_{st.session_state[f'canvas_key_{q_id}']}",
+    )
 
 # 解答の表示
 with st.expander("💡 解答を表示する"):
