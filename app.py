@@ -318,7 +318,7 @@ is_checked = q_id in st.session_state.bookmarks
 chk_key = f"chk_{q_id}"
 
 # on_change(コールバック)を使わず、直接値の変動を検知する
-new_is_checked = st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, key=chk_key)
+new_is_checked = st.checkbox("この問題をチェックする（弱点・復習用）", value=is_checked, key=chk_key)
 
 if new_is_checked != is_checked:
     if new_is_checked:
