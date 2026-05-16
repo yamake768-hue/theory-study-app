@@ -362,77 +362,121 @@ with tab1:
     user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
 
 with tab2:
-    # --- 超軽量HTML5ネイティブキャンバス（ラグ・滲み解消版） ---
-    # Streamlitのシステムを介さず、iPadのブラウザ上で直接高速描画処理を行います。
-    # Retinaディスプレイ（高DPI）に対応し、滲みを防ぐスケーリング処理を実装。
-    
+    # --- 超軽量HTML5ネイティブキャンバス（0ピクセルバグ修正版） ---
     canvas_html = f"""
-    <div style="position: relative; width: 100%; height: 400px; border: 1px solid #ccc; border-radius: 5px; background: #ffffff;">
-      <button onclick="clearCanvas()" style="position: absolute; top: 10px; right: 10px; z-index: 10; padding: 5px 15px; border-radius: 5px; border: 1px solid #ccc; background: #f8f9fa; cursor: pointer;">🗑️ 全消去</button>
+    <div id="canvas-container" style="position: relative; width: 100%; height: 400px; border: 1px solid #ccc; border-radius: 5px; background: #ffffff;">
+      <button onclick="clearCanvas()" style="position: absolute; top: 10px; right: 10px; z-index: 10; padding: 8px 15px; border-radius: 5px; border: 1px solid #ccc; background: #f8f9fa; cursor: pointer; font-size: 16px;">🗑️ 全消去</button>
       <canvas id="scratchpad" style="width: 100%; height: 100%; touch-action: none;"></canvas>
     </div>
     
     <script>
       const canvas = document.getElementById('scratchpad');
       const ctx = canvas.getContext('2d');
+      const container = document.getElementById('canvas-container');
       
-      // Retinaディスプレイ等の高画質画面での滲みを防ぐ処理
+      // Retinaディスプレイ対応 ＆ タブ表示時のサイズ再計算
       function resizeCanvas() {{
-          const rect = canvas.getBoundingClientRect();
+          const rect = container.getBoundingClientRect();
+          // タブが隠れていてサイズが0の時は処理をスキップ
+          if (rect.width === 0 || rect.height === 0) return; 
+          
           const dpr = window.devicePixelRatio || 1;
+          
+          // 描画済みの内容があれば一時保存（リサイズで消えないようにする）
+          let tempCanvas = null;
+          if (canvas.width > 0) {{
+              tempCanvas = document.createElement('canvas');
+              tempCanvas.width = canvas.width;
+              tempCanvas.height = canvas.height;
+              tempCanvas.getContext('2d').drawImage(canvas, 0, 0);
+          }}
+
+          // 正しい解像度でキャンバスを再設定
           canvas.width = rect.width * dpr;
           canvas.height = rect.height * dpr;
           ctx.scale(dpr, dpr);
-          ctx.lineWidth = 1; // ペンの太さ固定
+          ctx.lineWidth = 1.5;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           ctx.strokeStyle = '#000000';
+
+          // 一時保存した描画内容を復元
+          if (tempCanvas) {{
+              ctx.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height, 0, 0, canvas.width / dpr, canvas.height / dpr);
+          }}
       }}
       
-      // 初期化
-      resizeCanvas();
+      // 【重要】タブが開かれてキャンバスが表示されたことを自動検知してサイズ計算する
+      const resizeObserver = new ResizeObserver(entries => {{
+          for (let entry of entries) {{
+              if (entry.contentRect.width > 0) {{
+                  resizeCanvas();
+              }}
+          }}
+      }});
+      resizeObserver.observe(container);
       
       let drawing = false;
       
       function getPos(e) {{
           const rect = canvas.getBoundingClientRect();
+          let clientX = e.clientX;
+          let clientY = e.clientY;
+          
+          // タッチイベント用の補助（Apple Pencil対応強化）
+          if (e.touches && e.touches.length > 0) {{
+              clientX = e.touches[0].clientX;
+              clientY = e.touches[0].clientY;
+          }}
+          
           return {{
-              x: e.clientX - rect.left,
-              y: e.clientY - rect.top
+              x: clientX - rect.left,
+              y: clientY - rect.top
           }};
       }}
       
-      // Apple Pencilのタッチイベント（ラグなし）
-      canvas.addEventListener('pointerdown', (e) => {{
+      function startDrawing(e) {{
           drawing = true;
           const pos = getPos(e);
           ctx.beginPath();
           ctx.moveTo(pos.x, pos.y);
           e.preventDefault();
-      }});
+      }}
       
-      canvas.addEventListener('pointermove', (e) => {{
+      function draw(e) {{
           if (!drawing) return;
           const pos = getPos(e);
           ctx.lineTo(pos.x, pos.y);
           ctx.stroke();
           e.preventDefault();
-      }});
+      }}
       
-      window.addEventListener('pointerup', () => {{
+      function stopDrawing() {{
           drawing = false;
-      }});
+      }}
       
-      // 全消去機能
+      // ペン操作（Apple Pencil）のイベント
+      canvas.addEventListener('pointerdown', startDrawing, {{ passive: false }});
+      canvas.addEventListener('pointermove', draw, {{ passive: false }});
+      canvas.addEventListener('pointerup', stopDrawing);
+      canvas.addEventListener('pointercancel', stopDrawing);
+      
+      // Safari用の補助タッチイベント
+      canvas.addEventListener('touchstart', startDrawing, {{ passive: false }});
+      canvas.addEventListener('touchmove', draw, {{ passive: false }});
+      canvas.addEventListener('touchend', stopDrawing);
+      
       function clearCanvas() {{
-          const rect = canvas.getBoundingClientRect();
-          ctx.clearRect(0, 0, rect.width, rect.height);
+          // Canvasの全領域をクリア（Retinaのスケールを考慮して座標をリセット）
+          ctx.save();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.restore();
       }}
     </script>
     """
     
-    # HTMLをそのまま埋め込む（StreamlitのReactシステムを完全にバイパスします）
-    components.html(canvas_html, height=420)
+    components.html(canvas_html, height=450)
 
 # 解答の表示
 with st.expander("💡 解答を表示する"):
