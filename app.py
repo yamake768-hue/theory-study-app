@@ -1,9 +1,9 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import os
 import glob
 import requests
-from streamlit_drawable_canvas import st_canvas
 
 # --- ページ設定 ---
 st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="wide")
@@ -11,7 +11,7 @@ st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="w
 # --- UI改善用のカスタムCSS ---
 st.markdown(
     """
-   <style>
+    <style>
     [data-testid="stSidebarResizer"] {
         width: 15px !important;
         background-color: rgba(150, 150, 150, 0.1) !important;
@@ -27,14 +27,6 @@ st.markdown(
         font-weight: normal !important;
         text-decoration: underline !important;
     }
-    /* ▼ここを追加（手書きキャンバスでのSafariのスクロール干渉を完全ブロック）▼ */
-    [data-testid="stCanvas"] {
-        touch-action: none !important;
-    }
-    canvas {
-        touch-action: none !important;
-    }
-    /* ▲ここまで追加▲ */
     </style>
     """,
     unsafe_allow_html=True
@@ -129,7 +121,7 @@ if "initialized" not in st.session_state:
     st.session_state.q_index = url_q if 0 <= url_q < valid_q_len else 0
     
     st.session_state.active_q_id = f"{st.session_state.current_ch}__{st.session_state.current_cat}__{st.session_state.q_index}"
-    st.session_state.answers = {} # ブラウザを開いている間だけの一時保存用
+    st.session_state.answers = {} 
     
     fmt = data[st.session_state.current_ch][st.session_state.current_cat][st.session_state.q_index].get("format", "")
     st.session_state.user_input_area = fmt
@@ -144,7 +136,6 @@ def update_active_state(ch, cat, q_idx):
     new_id = f"{ch}__{cat}__{q_idx}"
     st.session_state.active_q_id = new_id
     
-    # セッション内に一時記憶があれば復元、なければ初期フォーマット
     if new_id in st.session_state.answers:
         st.session_state.user_input_area = st.session_state.answers[new_id]
     else:
@@ -371,31 +362,77 @@ with tab1:
     user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
 
 with tab2:
-    # ツールバー（太さ、色、全消去）
-    col_tool1, col_tool2, col_tool3 = st.columns([2, 2, 1])
-    with col_tool1:
-        stroke_width = st.slider("ペンの太さ", 1, 20, 2)
-    with col_tool2:
-        stroke_color = st.color_picker("ペンの色", "#000000")
-    with col_tool3:
-        # キャンバスリセット用のキー管理
-        if f"canvas_key_{q_id}" not in st.session_state:
-            st.session_state[f"canvas_key_{q_id}"] = 0
-        if st.button("🗑️ 全消去", use_container_width=True):
-            st.session_state[f"canvas_key_{q_id}"] += 1
-            st.rerun()
-
-    # 手書きキャンバスの描画
-    st_canvas(
-        fill_color="rgba(255, 255, 255, 0.0)",
-        stroke_width=stroke_width,
-        stroke_color=stroke_color,
-        background_color="#ffffff",
-        height=300,
-        drawing_mode="freedraw",
-        update_streamlit=False, # 👈 【超重要】1画ごとのサーバー通信を遮断してラグを消滅させる
-        key=f"canvas_{q_id}_{st.session_state[f'canvas_key_{q_id}']}",
-    )
+    # --- 超軽量HTML5ネイティブキャンバス（ラグ・滲み解消版） ---
+    # Streamlitのシステムを介さず、iPadのブラウザ上で直接高速描画処理を行います。
+    # Retinaディスプレイ（高DPI）に対応し、滲みを防ぐスケーリング処理を実装。
+    
+    canvas_html = f"""
+    <div style="position: relative; width: 100%; height: 400px; border: 1px solid #ccc; border-radius: 5px; background: #ffffff;">
+      <button onclick="clearCanvas()" style="position: absolute; top: 10px; right: 10px; z-index: 10; padding: 5px 15px; border-radius: 5px; border: 1px solid #ccc; background: #f8f9fa; cursor: pointer;">🗑️ 全消去</button>
+      <canvas id="scratchpad" style="width: 100%; height: 100%; touch-action: none;"></canvas>
+    </div>
+    
+    <script>
+      const canvas = document.getElementById('scratchpad');
+      const ctx = canvas.getContext('2d');
+      
+      // Retinaディスプレイ等の高画質画面での滲みを防ぐ処理
+      function resizeCanvas() {{
+          const rect = canvas.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = rect.width * dpr;
+          canvas.height = rect.height * dpr;
+          ctx.scale(dpr, dpr);
+          ctx.lineWidth = 1; // ペンの太さ固定
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = '#000000';
+      }}
+      
+      // 初期化
+      resizeCanvas();
+      
+      let drawing = false;
+      
+      function getPos(e) {{
+          const rect = canvas.getBoundingClientRect();
+          return {{
+              x: e.clientX - rect.left,
+              y: e.clientY - rect.top
+          }};
+      }}
+      
+      // Apple Pencilのタッチイベント（ラグなし）
+      canvas.addEventListener('pointerdown', (e) => {{
+          drawing = true;
+          const pos = getPos(e);
+          ctx.beginPath();
+          ctx.moveTo(pos.x, pos.y);
+          e.preventDefault();
+      }});
+      
+      canvas.addEventListener('pointermove', (e) => {{
+          if (!drawing) return;
+          const pos = getPos(e);
+          ctx.lineTo(pos.x, pos.y);
+          ctx.stroke();
+          e.preventDefault();
+      }});
+      
+      window.addEventListener('pointerup', () => {{
+          drawing = false;
+      }});
+      
+      // 全消去機能
+      function clearCanvas() {{
+          const rect = canvas.getBoundingClientRect();
+          ctx.clearRect(0, 0, rect.width, rect.height);
+      }}
+    </script>
+    """
+    
+    # HTMLをそのまま埋め込む（StreamlitのReactシステムを完全にバイパスします）
+    components.html(canvas_html, height=420)
 
 # 解答の表示
 with st.expander("💡 解答を表示する"):
