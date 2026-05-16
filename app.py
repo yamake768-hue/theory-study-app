@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import json
 import os
 import glob
@@ -57,7 +56,7 @@ if not data:
 
 chapters = list(data.keys())
 
-# --- GitHub Gistを利用したクラウド保存ロジック（チェック状態のみ） ---
+# --- 【診断機能付き】GitHub Gistを利用したクラウド保存ロジック ---
 def load_bookmarks():
     if "GITHUB_TOKEN" in st.secrets and "GIST_ID" in st.secrets:
         headers = {
@@ -71,19 +70,23 @@ def load_bookmarks():
                 if "bookmarks.json" in files:
                     content = files["bookmarks.json"]["content"]
                     return set(json.loads(content))
-        except Exception:
-            pass
+            else:
+                st.error(f"【読込エラー】GitHubの認証に失敗しました (コード: {res.status_code})。Secretsの設定を見直してください。")
+        except Exception as e:
+            st.error(f"【通信エラー】データの読み込みに失敗しました: {e}")
+    else:
+        st.warning("⚠️ GitHubの設定(Secrets)が見つかりません。チェックはクラウドに保存されません。")
     return set()
 
 def save_bookmarks_to_server():
     if "GITHUB_TOKEN" not in st.secrets or "GIST_ID" not in st.secrets:
-        return False, "Secrets未設定"
+        return False, "設定(Secrets)にトークンまたはIDが登録されていません。"
 
     headers = {
         "Authorization": f"token {st.secrets['GITHUB_TOKEN']}",
         "Accept": "application/vnd.github.v3+json"
     }
-    payload = {
+    data = {
         "files": {
             "bookmarks.json": {
                 "content": json.dumps(list(st.session_state.bookmarks))
@@ -91,11 +94,11 @@ def save_bookmarks_to_server():
         }
     }
     try:
-        res = requests.patch(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers, json=payload)
+        res = requests.patch(f"https://api.github.com/gists/{st.secrets['GIST_ID']}", headers=headers, json=data)
         if res.status_code == 200:
             return True, ""
         else:
-            return False, f"APIエラー ({res.status_code})"
+            return False, f"APIエラー ({res.status_code}): {res.text}"
     except Exception as e:
         return False, f"通信エラー: {str(e)}"
 
@@ -121,7 +124,7 @@ if "initialized" not in st.session_state:
     st.session_state.q_index = url_q if 0 <= url_q < valid_q_len else 0
     
     st.session_state.active_q_id = f"{st.session_state.current_ch}__{st.session_state.current_cat}__{st.session_state.q_index}"
-    st.session_state.answers = {} 
+    st.session_state.answers = {}
     
     fmt = data[st.session_state.current_ch][st.session_state.current_cat][st.session_state.q_index].get("format", "")
     st.session_state.user_input_area = fmt
@@ -310,9 +313,11 @@ with col_prog:
 
 st.markdown(f"<span style='color:gray; font-size: 0.9em;'>【{display_ch}：{display_cat}】</span>", unsafe_allow_html=True)
 
-# チェックボックスと保存処理
+# --- チェックボックスと保存処理 ---
 is_checked = q_id in st.session_state.bookmarks
 chk_key = f"chk_{q_id}"
+
+# on_change(コールバック)を使わず、直接値の変動を検知する
 new_is_checked = st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, key=chk_key)
 
 if new_is_checked != is_checked:
@@ -321,11 +326,14 @@ if new_is_checked != is_checked:
     else:
         st.session_state.bookmarks.discard(q_id)
         
+    # クラウドへ保存し、結果を通知する
     success, msg = save_bookmarks_to_server()
     if success:
         st.toast("✅ クラウドにチェックを保存しました", icon="☁️")
     else:
         st.error(f"❌ 保存に失敗しました: {msg}")
+    
+    # 状態を更新したため、画面をリロードして最新状態を反映
     st.rerun()
 
 # 問題文の表示
@@ -355,128 +363,8 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# --- タブによる入力方式の切り替え ---
-tab1, tab2 = st.tabs(["✍️ 解答入力（テキスト）", "📝 計算用紙（手書き）"])
-
-with tab1:
-    user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
-
-with tab2:
-    # --- 超軽量HTML5ネイティブキャンバス（0ピクセルバグ修正版） ---
-    canvas_html = f"""
-    <div id="canvas-container" style="position: relative; width: 100%; height: 400px; border: 1px solid #ccc; border-radius: 5px; background: #ffffff;">
-      <button onclick="clearCanvas()" style="position: absolute; top: 10px; right: 10px; z-index: 10; padding: 8px 15px; border-radius: 5px; border: 1px solid #ccc; background: #f8f9fa; cursor: pointer; font-size: 16px;">🗑️ 全消去</button>
-      <canvas id="scratchpad" style="width: 100%; height: 100%; touch-action: none;"></canvas>
-    </div>
-    
-    <script>
-      const canvas = document.getElementById('scratchpad');
-      const ctx = canvas.getContext('2d');
-      const container = document.getElementById('canvas-container');
-      
-      // Retinaディスプレイ対応 ＆ タブ表示時のサイズ再計算
-      function resizeCanvas() {{
-          const rect = container.getBoundingClientRect();
-          // タブが隠れていてサイズが0の時は処理をスキップ
-          if (rect.width === 0 || rect.height === 0) return; 
-          
-          const dpr = window.devicePixelRatio || 1;
-          
-          // 描画済みの内容があれば一時保存（リサイズで消えないようにする）
-          let tempCanvas = null;
-          if (canvas.width > 0) {{
-              tempCanvas = document.createElement('canvas');
-              tempCanvas.width = canvas.width;
-              tempCanvas.height = canvas.height;
-              tempCanvas.getContext('2d').drawImage(canvas, 0, 0);
-          }}
-
-          // 正しい解像度でキャンバスを再設定
-          canvas.width = rect.width * dpr;
-          canvas.height = rect.height * dpr;
-          ctx.scale(dpr, dpr);
-          ctx.lineWidth = 1.5;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.strokeStyle = '#000000';
-
-          // 一時保存した描画内容を復元
-          if (tempCanvas) {{
-              ctx.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height, 0, 0, canvas.width / dpr, canvas.height / dpr);
-          }}
-      }}
-      
-      // 【重要】タブが開かれてキャンバスが表示されたことを自動検知してサイズ計算する
-      const resizeObserver = new ResizeObserver(entries => {{
-          for (let entry of entries) {{
-              if (entry.contentRect.width > 0) {{
-                  resizeCanvas();
-              }}
-          }}
-      }});
-      resizeObserver.observe(container);
-      
-      let drawing = false;
-      
-      function getPos(e) {{
-          const rect = canvas.getBoundingClientRect();
-          let clientX = e.clientX;
-          let clientY = e.clientY;
-          
-          // タッチイベント用の補助（Apple Pencil対応強化）
-          if (e.touches && e.touches.length > 0) {{
-              clientX = e.touches[0].clientX;
-              clientY = e.touches[0].clientY;
-          }}
-          
-          return {{
-              x: clientX - rect.left,
-              y: clientY - rect.top
-          }};
-      }}
-      
-      function startDrawing(e) {{
-          drawing = true;
-          const pos = getPos(e);
-          ctx.beginPath();
-          ctx.moveTo(pos.x, pos.y);
-          e.preventDefault();
-      }}
-      
-      function draw(e) {{
-          if (!drawing) return;
-          const pos = getPos(e);
-          ctx.lineTo(pos.x, pos.y);
-          ctx.stroke();
-          e.preventDefault();
-      }}
-      
-      function stopDrawing() {{
-          drawing = false;
-      }}
-      
-      // ペン操作（Apple Pencil）のイベント
-      canvas.addEventListener('pointerdown', startDrawing, {{ passive: false }});
-      canvas.addEventListener('pointermove', draw, {{ passive: false }});
-      canvas.addEventListener('pointerup', stopDrawing);
-      canvas.addEventListener('pointercancel', stopDrawing);
-      
-      // Safari用の補助タッチイベント
-      canvas.addEventListener('touchstart', startDrawing, {{ passive: false }});
-      canvas.addEventListener('touchmove', draw, {{ passive: false }});
-      canvas.addEventListener('touchend', stopDrawing);
-      
-      function clearCanvas() {{
-          // Canvasの全領域をクリア（Retinaのスケールを考慮して座標をリセット）
-          ctx.save();
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.restore();
-      }}
-    </script>
-    """
-    
-    components.html(canvas_html, height=450)
+# 解答欄（テキスト入力のみにロールバック）
+user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
 
 # 解答の表示
 with st.expander("💡 解答を表示する"):
