@@ -11,7 +11,7 @@ st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="w
 # --- UI改善用のカスタムCSS ---
 st.markdown(
     """
-    <style>
+   <style>
     [data-testid="stSidebarResizer"] {
         width: 15px !important;
         background-color: rgba(150, 150, 150, 0.1) !important;
@@ -27,6 +27,14 @@ st.markdown(
         font-weight: normal !important;
         text-decoration: underline !important;
     }
+    /* ▼ここを追加（手書きキャンバスでのSafariのスクロール干渉を完全ブロック）▼ */
+    [data-testid="stCanvas"] {
+        touch-action: none !important;
+    }
+    canvas {
+        touch-action: none !important;
+    }
+    /* ▲ここまで追加▲ */
     </style>
     """,
     unsafe_allow_html=True
@@ -385,6 +393,7 @@ with tab2:
         background_color="#ffffff",
         height=300,
         drawing_mode="freedraw",
+        update_streamlit=False, # 👈 【超重要】1画ごとのサーバー通信を遮断してラグを消滅させる
         key=f"canvas_{q_id}_{st.session_state[f'canvas_key_{q_id}']}",
     )
 
