@@ -131,29 +131,23 @@ if "initialized" not in st.session_state:
     st.session_state.active_q_id = get_q_id(st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index)
     st.session_state.answers = {}
     
-    fmt = data[st.session_state.current_ch][st.session_state.current_cat][st.session_state.q_index].get("format", "")
-    st.session_state.user_input_area = fmt
-    
     st.session_state.initialized = True
     st.session_state.filter_mode = url_filter
     
-    # リロード時に復習モードだった場合、現在地を復元するフラグを立てる
     if url_filter:
         st.session_state.need_filter_restore = True
         st.session_state.restore_target = st.session_state.active_q_id
 
 def save_answer():
-    st.session_state.answers[st.session_state.active_q_id] = st.session_state.user_input_area
+    # 現在アクティブな問題の固有キーからテキストエリアの値を取得して一時記憶に保存
+    current_key = f"text_{st.session_state.active_q_id}"
+    if current_key in st.session_state:
+        st.session_state.answers[st.session_state.active_q_id] = st.session_state[current_key]
 
 def update_active_state(ch, cat, q_idx):
     new_id = get_q_id(ch, cat, q_idx)
     st.session_state.active_q_id = new_id
     
-    if new_id in st.session_state.answers:
-        st.session_state.user_input_area = st.session_state.answers[new_id]
-    else:
-        st.session_state.user_input_area = data[ch][cat][q_idx].get("format", "")
-        
     st.query_params["ch"] = ch
     st.query_params["cat"] = cat
     st.query_params["q"] = str(q_idx)
@@ -205,17 +199,15 @@ with st.sidebar:
     st.header("メニュー")
     new_filter_mode = st.checkbox("☑ チェックした問題のみ表示", value=st.session_state.filter_mode)
     
-    # モード切り替え時の現在地維持ロジック
     if new_filter_mode != st.session_state.filter_mode:
+        save_answer() # 状態切り替え前に現在の入力を確実に退避
         st.session_state.filter_mode = new_filter_mode
         st.query_params["filter"] = str(new_filter_mode).lower()
         
         if new_filter_mode:
-            # 通常モードから復習モードへの切り替え：今の問題をターゲットに設定
             st.session_state.need_filter_restore = True
             st.session_state.restore_target = st.session_state.active_q_id
         else:
-            # 復習モードから通常モードへの切り替え：復習モードで見ていた問題に飛ぶ
             target_id = st.session_state.active_q_id
             try:
                 parts = target_id.split("____")
@@ -266,7 +258,6 @@ if st.session_state.filter_mode:
         st.warning("チェックされた問題がありません。左のメニューからチェックを外し、通常モードで問題にチェックを入れてください。")
         st.stop()
         
-    # リロード時や切り替え時に、見ていた問題のインデックスを探して復元する
     if st.session_state.get("need_filter_restore", False):
         target = st.session_state.get("restore_target", "")
         found_idx = 0
@@ -358,7 +349,6 @@ st.markdown(f"<span style='color:gray; font-size: 0.9em;'>【{display_ch}：{dis
 is_checked = q_id in st.session_state.bookmarks
 chk_key = f"chk_{q_id}"
 
-# on_changeを使わず、直接値の変動を検知する
 new_is_checked = st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, key=chk_key)
 
 if new_is_checked != is_checked:
@@ -367,7 +357,6 @@ if new_is_checked != is_checked:
     else:
         st.session_state.bookmarks.discard(q_id)
         
-    # クラウドへ保存し、結果を通知する
     success, msg = save_bookmarks_to_server()
     if success:
         st.toast("✅ クラウドにチェックを保存しました", icon="☁️")
@@ -403,8 +392,9 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# 解答欄
-user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
+# --- 【解決策】問題ごとの固有キーを割り当て、イベントの衝突を完全に消滅させる ---
+default_ans = st.session_state.answers.get(q_id, current_q.get("format", ""))
+user_ans = st.text_area("解答を入力:", value=default_ans, key=f"text_{q_id}", height=200, label_visibility="collapsed")
 
 # 解答の表示
 with st.expander("💡 解答を表示する"):
