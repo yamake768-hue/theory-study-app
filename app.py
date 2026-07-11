@@ -4,6 +4,10 @@ import os
 import glob
 import requests
 
+# --- ヘルパー関数: ID生成 ---
+def get_q_id(ch, cat, idx):
+    return f"{ch}____{cat}____{idx}"
+
 # --- ページ設定 ---
 st.set_page_config(page_title="財務諸表論 理論学習アプリ", layout="wide")
 
@@ -106,11 +110,12 @@ if "bookmarks" not in st.session_state:
     st.session_state.bookmarks = load_bookmarks()
 
 
-# --- URLパラメータによる状態の復元 ---
+# --- URLパラメータによる状態の復元（モード維持・ジャンプ防止対応） ---
 if "initialized" not in st.session_state:
     params = st.query_params
     url_ch = params.get("ch", chapters[0])
     url_cat = params.get("cat", "")
+    url_filter = params.get("filter", "false").lower() == "true"
     try:
         url_q = int(params.get("q", 0))
     except ValueError:
@@ -123,20 +128,25 @@ if "initialized" not in st.session_state:
     valid_q_len = len(data[st.session_state.current_ch][st.session_state.current_cat])
     st.session_state.q_index = url_q if 0 <= url_q < valid_q_len else 0
     
-    st.session_state.active_q_id = f"{st.session_state.current_ch}__{st.session_state.current_cat}__{st.session_state.q_index}"
+    st.session_state.active_q_id = get_q_id(st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index)
     st.session_state.answers = {}
     
     fmt = data[st.session_state.current_ch][st.session_state.current_cat][st.session_state.q_index].get("format", "")
     st.session_state.user_input_area = fmt
     
     st.session_state.initialized = True
-    st.session_state.filter_mode = False
+    st.session_state.filter_mode = url_filter
+    
+    # リロード時に復習モードだった場合、現在地を復元するフラグを立てる
+    if url_filter:
+        st.session_state.need_filter_restore = True
+        st.session_state.restore_target = st.session_state.active_q_id
 
 def save_answer():
     st.session_state.answers[st.session_state.active_q_id] = st.session_state.user_input_area
 
 def update_active_state(ch, cat, q_idx):
-    new_id = f"{ch}__{cat}__{q_idx}"
+    new_id = get_q_id(ch, cat, q_idx)
     st.session_state.active_q_id = new_id
     
     if new_id in st.session_state.answers:
@@ -147,6 +157,7 @@ def update_active_state(ch, cat, q_idx):
     st.query_params["ch"] = ch
     st.query_params["cat"] = cat
     st.query_params["q"] = str(q_idx)
+    st.query_params["filter"] = str(st.session_state.filter_mode).lower()
 
 # --- ナビゲーションロジック ---
 def get_next_state():
@@ -193,9 +204,28 @@ st.title("財務諸表論 理論演習")
 with st.sidebar:
     st.header("メニュー")
     new_filter_mode = st.checkbox("☑ チェックした問題のみ表示", value=st.session_state.filter_mode)
+    
+    # モード切り替え時の現在地維持ロジック
     if new_filter_mode != st.session_state.filter_mode:
         st.session_state.filter_mode = new_filter_mode
-        st.session_state.q_index = 0
+        st.query_params["filter"] = str(new_filter_mode).lower()
+        
+        if new_filter_mode:
+            # 通常モードから復習モードへの切り替え：今の問題をターゲットに設定
+            st.session_state.need_filter_restore = True
+            st.session_state.restore_target = st.session_state.active_q_id
+        else:
+            # 復習モードから通常モードへの切り替え：復習モードで見ていた問題に飛ぶ
+            target_id = st.session_state.active_q_id
+            try:
+                parts = target_id.split("____")
+                st.session_state.current_ch = parts[0]
+                st.session_state.current_cat = parts[1]
+                st.session_state.q_index = int(parts[2])
+            except:
+                st.session_state.q_index = 0
+            update_active_state(st.session_state.current_ch, st.session_state.current_cat, st.session_state.q_index)
+            
         st.rerun()
 
     st.write("---")
@@ -227,7 +257,7 @@ if st.session_state.filter_mode:
     for ch in chapters:
         for cat in data[ch].keys():
             for i, q in enumerate(data[ch][cat]):
-                temp_id = f"{ch}____{cat}____{i}"
+                temp_id = get_q_id(ch, cat, i)
                 if temp_id in st.session_state.bookmarks:
                     active_list.append((ch, cat, i, q, temp_id))
     
@@ -235,6 +265,17 @@ if st.session_state.filter_mode:
     if total_q == 0:
         st.warning("チェックされた問題がありません。左のメニューからチェックを外し、通常モードで問題にチェックを入れてください。")
         st.stop()
+        
+    # リロード時や切り替え時に、見ていた問題のインデックスを探して復元する
+    if st.session_state.get("need_filter_restore", False):
+        target = st.session_state.get("restore_target", "")
+        found_idx = 0
+        for idx, item in enumerate(active_list):
+            if item[4] == target:
+                found_idx = idx
+                break
+        st.session_state.q_index = found_idx
+        st.session_state.need_filter_restore = False
         
     if st.session_state.q_index >= total_q:
         st.session_state.q_index = total_q - 1
@@ -273,7 +314,7 @@ else:
     current_ch = st.session_state.current_ch
     current_cat = st.session_state.current_cat
     original_idx = st.session_state.q_index
-    q_id = f"{current_ch}____{current_cat}____{original_idx}"
+    q_id = get_q_id(current_ch, current_cat, original_idx)
     
     is_first = (get_prev_state() is None)
     is_last = (get_next_state() is None)
@@ -317,8 +358,8 @@ st.markdown(f"<span style='color:gray; font-size: 0.9em;'>【{display_ch}：{dis
 is_checked = q_id in st.session_state.bookmarks
 chk_key = f"chk_{q_id}"
 
-# on_change(コールバック)を使わず、直接値の変動を検知する
-new_is_checked = st.checkbox("この問題をチェックする（弱点・復習用）", value=is_checked, key=chk_key)
+# on_changeを使わず、直接値の変動を検知する
+new_is_checked = st.checkbox("✅ この問題をチェックする（弱点・復習用）", value=is_checked, key=chk_key)
 
 if new_is_checked != is_checked:
     if new_is_checked:
@@ -333,7 +374,6 @@ if new_is_checked != is_checked:
     else:
         st.error(f"❌ 保存に失敗しました: {msg}")
     
-    # 状態を更新したため、画面をリロードして最新状態を反映
     st.rerun()
 
 # 問題文の表示
@@ -363,7 +403,7 @@ else:
 
 st.markdown(f"<span style='color:blue; font-weight:bold; font-size: 0.9em;'>{guide_text}</span>", unsafe_allow_html=True)
 
-# 解答欄（テキスト入力のみにロールバック）
+# 解答欄
 user_ans = st.text_area("解答を入力:", key="user_input_area", height=200, label_visibility="collapsed")
 
 # 解答の表示
